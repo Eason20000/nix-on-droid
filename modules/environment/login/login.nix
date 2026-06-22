@@ -1,9 +1,11 @@
-# Copyright (c) 2019-2022, see AUTHORS. Licensed under MIT License, see LICENSE.
+# Copyright (c) 2019-2024, see AUTHORS. Licensed under MIT License, see LICENSE.
 
-{ config, writeScript, writeText }:
+{ config, lib, writeScript, writeText, coreutils }:
 
 let
-  inherit (config.build) installationDir extraProotOptions;
+  inherit (config.build) installationDir extraProotOptions extraChrootOptions;
+  inherit (config.build.container) mode;
+
   fakeProcStat = writeText "fakeProcStat" ''
     btime 0
   '';
@@ -19,20 +21,97 @@ writeScript "login" ''
 
   export USER="${config.user.userName}"
   export HOME="${config.user.home}"
-  export PROOT_TMP_DIR=${installationDir}/tmp
-  export PROOT_L2S_DIR=${installationDir}/.l2s
+
+  if test -e ${installationDir}/usr/lib/.login-inner.new; then
+    echo "Installing new login-inner..."
+    /system/bin/mv ${installationDir}/usr/lib/.login-inner.new ${installationDir}/usr/lib/login-inner
+  fi
+
+  ${lib.optionalString (mode == "chroot") ''
+    if [ "''${NIX_ON_DROID_FORCE_PROOT:-}" != 1 ]; then
+      : ''${_NOD_APP_UID:=$(/system/bin/stat -c %u ${config.user.home} 2>/dev/null || echo "")}
+      : ''${_NOD_APP_GID:=$(/system/bin/stat -c %g ${config.user.home} 2>/dev/null || echo "")}
+      export _NOD_APP_UID _NOD_APP_GID
+
+      if [ "$(/system/bin/id -u)" != "0" ]; then
+        for su_path in /sbin/su /system/xbin/su /system/bin/su; do
+          if [ -x "$su_path" ]; then
+            exec "$su_path" -c "${installationDir}/bin/login $*" || \
+            exec "$su_path" 0 "${installationDir}/bin/login" "$@" || \
+            true
+          fi
+        done
+      fi
+
+      /system/bin/mkdir -p ${installationDir}/dev
+      /system/bin/mkdir -p ${installationDir}/proc
+      /system/bin/mkdir -p ${installationDir}/sys
+      /system/bin/mkdir -p ${installationDir}/android
+      /system/bin/mkdir -p ${installationDir}/tmp
+      /system/bin/mkdir -p ${installationDir}${config.user.home}
+
+      _chroot_marker="/tmp/.chroot-entered-$$"
+      : > "${installationDir}$_chroot_marker"
+      /system/bin/chown $_NOD_APP_UID:$_NOD_APP_GID "${installationDir}$_chroot_marker" 2>/dev/null || \
+        /system/bin/chmod 666 "${installationDir}$_chroot_marker"
+
+      if /system/bin/mount --rbind /dev  ${installationDir}/dev 2>/dev/null; then
+        set +e
+        /system/bin/mount --bind /proc  ${installationDir}/proc
+        /system/bin/mount --bind /sys   ${installationDir}/sys
+        /system/bin/mount --bind /      ${installationDir}/android
+        /system/bin/mount --bind ${config.user.home} ${installationDir}${config.user.home}
+        /system/bin/mount -t tmpfs tmpfs ${installationDir}/dev/shm 2>/dev/null || true
+
+        ${lib.concatMapStringsSep "\n" (cmd: "        ${cmd}") extraChrootOptions}
+
+        /system/bin/env -i \
+          HOME="${config.user.home}" \
+          USER="${config.user.userName}" \
+          TERM="''${TERM:-xterm-256color}" \
+          TMPDIR=/tmp \
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+          /system/bin/setsid -c -c -w \
+          /system/bin/chroot ${installationDir} \
+          ${coreutils}/bin/chroot --userspec=''${_NOD_APP_UID:-${toString config.user.uid}}:''${_NOD_APP_GID:-${toString config.user.gid}} / \
+          /bin/sh -c '
+            echo > '$_chroot_marker'
+            exec /bin/sh /usr/lib/login-inner "$@"
+          ' -- "$@"
+        rc=$?
+        set -e
+
+        /system/bin/umount -l ${installationDir}/dev/shm 2>/dev/null || true
+        /system/bin/umount -l ${installationDir}${config.user.home} 2>/dev/null || true
+        /system/bin/umount -l ${installationDir}/android  2>/dev/null || true
+        /system/bin/umount -l ${installationDir}/sys      2>/dev/null || true
+        /system/bin/umount -l ${installationDir}/proc     2>/dev/null || true
+        /system/bin/umount -l ${installationDir}/dev      2>/dev/null || true
+
+        # marker is empty at creation; echo > inside chroot fills it
+        if [ -s "${installationDir}$_chroot_marker" ]; then
+          /system/bin/rm -f "${installationDir}$_chroot_marker"
+          exit $rc
+        else
+          /system/bin/rm -f "${installationDir}$_chroot_marker"
+          echo "Warning: chroot failed to start, falling back to proot" >&2
+        fi
+      else
+        /system/bin/rm -f "${installationDir}$_chroot_marker"
+        echo "Warning: mount failed (not root?), falling back to proot" >&2
+      fi
+    fi
+  ''}
 
   if ! /system/bin/pgrep proot-static > /dev/null; then
     if test -e ${installationDir}/bin/.proot-static.new; then
       echo "Installing new proot-static..."
       /system/bin/mv ${installationDir}/bin/.proot-static.new ${installationDir}/bin/proot-static
     fi
-
-    if test -e ${installationDir}/usr/lib/.login-inner.new; then
-      echo "Installing new login-inner..."
-      /system/bin/mv ${installationDir}/usr/lib/.login-inner.new ${installationDir}/usr/lib/login-inner
-    fi
   fi
+
+  export PROOT_TMP_DIR=${installationDir}/tmp
+  export PROOT_L2S_DIR=${installationDir}/.l2s
 
   if [ ! -r /proc/stat ] && [ -e ${installationDir}${fakeProcStat} ]; then
     BIND_PROC_STAT="-b ${installationDir}${fakeProcStat}:/proc/stat"

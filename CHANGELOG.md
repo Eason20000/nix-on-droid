@@ -2,6 +2,16 @@
 
 ## Release 24.11 (unreleased)
 
+### New Options
+
+* `build.container.mode` now supports `"chroot"` for rooted devices.
+
+### Compatibility considerations
+
+* In `"chroot"` mode, the environment is stripped to `HOME`, `USER`,
+  `TERM`, `TMPDIR` and `PATH` via `env -i`.  The full Termux/Android
+  environment is only available in the default `"proot"` mode.
+
 ## Release 24.05
 
 ### New Options

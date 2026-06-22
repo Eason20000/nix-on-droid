@@ -10,8 +10,8 @@ access to [nixpkgs](https://github.com/NixOS/nixpkgs)' vast collection of
 (precompiled!) software and the best package manager under the sun. It's
 prototype-grade quality as of now, but hey, it works!
 
-It does not require root, user namespaces support or disabling SELinux,
-but it relies on `proot` and other hacks instead.
+It does not require root by default, but `chroot` mode is available for rooted devices
+(see <option>build.container.mode</option>).
 It uses [a fork](https://github.com/nix-community/nix-on-droid-app)
 of [Termux-the-terminal-emulator app](https://github.com/termux/termux-app),
 but has no relation to [Termux-the-distro](https://termux.com/).
@@ -115,6 +115,24 @@ Use `nix-on-droid switch` to activate the current configuration and
 
 For more information, please run `nix-on-droid help`.
 
+### Container mode
+
+Default `"proot"` uses ptrace and works without root.
+
+On rooted devices, `"chroot"` avoids ptrace overhead and supports
+native hardlinks and terminal job control:
+
+```nix
+{ pkgs, ... }:
+{
+  build.container.mode = "chroot";
+  system.stateVersion = "24.05";
+}
+```
+
+`/dev`, `/proc` and `/sys` are bind-mounted in; `env -i` strips the
+Android/Termux host environment. `NIX_ON_DROID_FORCE_PROOT=1` can force
+the proot fallback.
 
 ## Build Nix-on-Droid on your own
 
@@ -255,7 +273,8 @@ OK, real brief.
 Developer's device:
 
 1. `proot` for the target platform is cross-compiled against `bionic`,
-   (to fake file paths like `/nix/store`; think 'userspace `chroot`')
+   (to fake file paths like `/nix/store`, a userspace `chroot`;
+   rooted devices can also use actual `chroot`)
 2. Target `nix` is taken from the original release tarball
 3. Target `nix` database is initialized
 4. Support scripts and config files are built with `nix` and the Nix-on-Droid
