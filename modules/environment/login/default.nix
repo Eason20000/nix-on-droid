@@ -7,7 +7,7 @@ with lib;
 let
   cfg = config.environment.files;
 
-  login = pkgs.callPackage ./login.nix { inherit config; };
+  login = pkgs.callPackage ./login.nix { inherit config; inherit (pkgs) bash; };
 
   loginInner = pkgs.callPackage ./login-inner.nix {
     inherit config initialPackageInfo targetSystem;

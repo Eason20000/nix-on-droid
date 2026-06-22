@@ -1,6 +1,6 @@
 # Copyright (c) 2019-2024, see AUTHORS. Licensed under MIT License, see LICENSE.
 
-{ config, lib, writeScript, writeText, coreutils }:
+{ config, lib, writeScript, writeText, coreutils, bash }:
 
 let
   inherit (config.build) installationDir extraProotOptions extraChrootOptions;
@@ -125,7 +125,7 @@ writeScript "login" ''
     BIND_PROC_UPTIME=""
   fi
 
-  exec ${installationDir}/bin/proot-static \
+  exec     ${installationDir}/bin/proot-static \
     -b ${installationDir}/nix:/nix \
     -b ${installationDir}/bin:/bin! \
     -b ${installationDir}/etc:/etc! \
@@ -138,5 +138,5 @@ writeScript "login" ''
     --link2symlink \
     --sysvipc \
     ${builtins.concatStringsSep " " extraProotOptions} \
-    ${installationDir}/bin/sh ${installationDir}/usr/lib/login-inner "$@"
+    ${bash}/bin/sh ${installationDir}/usr/lib/login-inner "$@"
 ''
