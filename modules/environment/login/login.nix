@@ -12,6 +12,18 @@ let
   fakeProcUptime = writeText "fakeProcUptime" ''
     0.00 0.00
   '';
+
+  defaultChrootEnv = {
+    HOME = config.user.home;
+    PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+    TERM = "\${TERM:-xterm-256color}";
+    TMPDIR = "/tmp";
+    USER = config.user.userName;
+  };
+  chrootEnv = defaultChrootEnv // config.build.container.environment;
+
+  envEntries = lib.concatStringsSep " \\\n          "
+    (lib.mapAttrsToList (n: v: "${n}=${v}") chrootEnv);
 in
 
 writeScript "login" ''
@@ -29,11 +41,14 @@ writeScript "login" ''
 
   ${lib.optionalString (mode == "chroot") ''
     if [ "''${NIX_ON_DROID_FORCE_PROOT:-}" != 1 ]; then
-      : ''${_NOD_APP_UID:=$(/system/bin/stat -c %u ${config.user.home} 2>/dev/null || echo "")}
-      : ''${_NOD_APP_GID:=$(/system/bin/stat -c %g ${config.user.home} 2>/dev/null || echo "")}
-      export _NOD_APP_UID _NOD_APP_GID
+      _capture_identity() {
+        : ''${_NOD_APP_UID:=$(/system/bin/stat -c %u ${config.user.home} 2>/dev/null || echo "")}
+        : ''${_NOD_APP_GID:=$(/system/bin/stat -c %g ${config.user.home} 2>/dev/null || echo "")}
+        export _NOD_APP_UID _NOD_APP_GID
+      }
 
-      if [ "$(/system/bin/id -u)" != "0" ]; then
+      _escalate_to_root() {
+        if [ "$(/system/bin/id -u)" = "0" ]; then return 0; fi
         for su_path in /sbin/su /system/xbin/su /system/bin/su; do
           if [ -x "$su_path" ]; then
             exec "$su_path" -c "${installationDir}/bin/login $*" || \
@@ -41,21 +56,24 @@ writeScript "login" ''
             true
           fi
         done
-      fi
+      }
 
-      /system/bin/mkdir -p ${installationDir}/dev
-      /system/bin/mkdir -p ${installationDir}/proc
-      /system/bin/mkdir -p ${installationDir}/sys
-      /system/bin/mkdir -p ${installationDir}/android
-      /system/bin/mkdir -p ${installationDir}/tmp
-      /system/bin/mkdir -p ${installationDir}${config.user.home}
+      _prepare_chroot() {
+        /system/bin/mkdir -p ${installationDir}/dev ${installationDir}/proc \
+          ${installationDir}/sys ${installationDir}/android ${installationDir}/tmp \
+          ${installationDir}${config.user.home}
+        _chroot_marker="/tmp/.chroot-entered-$$"
+        : > "${installationDir}$_chroot_marker"
+        /system/bin/chown $_NOD_APP_UID:$_NOD_APP_GID "${installationDir}$_chroot_marker" 2>/dev/null || \
+          /system/bin/chmod 666 "${installationDir}$_chroot_marker"
+      }
 
-      _chroot_marker="/tmp/.chroot-entered-$$"
-      : > "${installationDir}$_chroot_marker"
-      /system/bin/chown $_NOD_APP_UID:$_NOD_APP_GID "${installationDir}$_chroot_marker" 2>/dev/null || \
-        /system/bin/chmod 666 "${installationDir}$_chroot_marker"
-
-      if /system/bin/mount --rbind /dev  ${installationDir}/dev 2>/dev/null; then
+      _enter_chroot() {
+        if ! /system/bin/mount --rbind /dev ${installationDir}/dev 2>/dev/null; then
+          /system/bin/rm -f "${installationDir}$_chroot_marker"
+          echo "Warning: mount failed (not root?), falling back to proot" >&2
+          return 1
+        fi
         set +e
         /system/bin/mount --bind /proc  ${installationDir}/proc
         /system/bin/mount --bind /sys   ${installationDir}/sys
@@ -66,11 +84,7 @@ writeScript "login" ''
         ${lib.concatMapStringsSep "\n" (cmd: "        ${cmd}") extraChrootOptions}
 
         /system/bin/env -i \
-          HOME="${config.user.home}" \
-          USER="${config.user.userName}" \
-          TERM="''${TERM:-xterm-256color}" \
-          TMPDIR=/tmp \
-          PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+          ${envEntries} \
           /system/bin/setsid -c -c -w \
           /system/bin/chroot ${installationDir} \
           ${coreutils}/bin/chroot --userspec=''${_NOD_APP_UID:-${toString config.user.uid}}:''${_NOD_APP_GID:-${toString config.user.gid}} / \
@@ -88,18 +102,19 @@ writeScript "login" ''
         /system/bin/umount -l ${installationDir}/proc     2>/dev/null || true
         /system/bin/umount -l ${installationDir}/dev      2>/dev/null || true
 
-        # marker is empty at creation; echo > inside chroot fills it
         if [ -s "${installationDir}$_chroot_marker" ]; then
           /system/bin/rm -f "${installationDir}$_chroot_marker"
           exit $rc
-        else
-          /system/bin/rm -f "${installationDir}$_chroot_marker"
-          echo "Warning: chroot failed to start, falling back to proot" >&2
         fi
-      else
         /system/bin/rm -f "${installationDir}$_chroot_marker"
-        echo "Warning: mount failed (not root?), falling back to proot" >&2
-      fi
+        echo "Warning: chroot failed to start, falling back to proot" >&2
+        return 1
+      }
+
+      _capture_identity
+      _escalate_to_root
+      _prepare_chroot
+      _enter_chroot || true
     fi
   ''}
 
