@@ -15,6 +15,13 @@ in
   options = {
 
     build = {
+      androidPackageName = mkOption {
+        type = types.str;
+        default = "com.termux.nix";
+        internal = true;
+        description = "Android package name, used to derive default Android app data paths.";
+      };
+
       initialBuild = mkOption {
         type = types.bool;
         default = false;
@@ -50,6 +57,25 @@ in
             (<literal>NIX_ON_DROID_FORCE_PROOT=1</literal>).
           '';
         };
+
+        environment = mkOption {
+          type = types.attrsOf types.str;
+          default = { };
+          description = ''
+            Environment variables passed via env -i into the chroot
+            container.  Only these variables survive the container
+            entry; all Android/Termux host variables are stripped.
+          '';
+          example = literalExpression ''
+            {
+              HOME = config.user.home;
+              USER = config.user.userName;
+              TERM = "'''${"TERM:-xterm-256color"}";
+              TMPDIR = "/tmp";
+              PATH = "/usr/bin:/bin";
+            }
+          '';
+        };
       };
 
       extraProotOptions = mkOption {
@@ -82,7 +108,7 @@ in
 
   config = {
 
-    build.installationDir = "/data/data/com.termux.nix/files/usr";
+    build.installationDir = mkDefault "/data/data/${cfg.androidPackageName}/files/usr";
 
     assertions = [
       {

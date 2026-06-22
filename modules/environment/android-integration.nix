@@ -6,10 +6,13 @@ let
   cfg = config.android-integration;
 
   termux-am =
-    pkgs.callPackage (import ../../pkgs/android-integration/termux-am.nix) { };
+    pkgs.callPackage (import ../../pkgs/android-integration/termux-am.nix) {
+      inherit (config.build) androidPackageName;
+    };
   termux-tools =
     pkgs.callPackage (import ../../pkgs/android-integration/termux-tools.nix) {
       inherit termux-am;
+      inherit (config.build) androidPackageName;
     };
 in
 {
